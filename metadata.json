@@ -1,0 +1,6 @@
+{
+  "name": "INFHOST - Minecraft Server Hosting Platform",
+  "description": "Production-oriented Minecraft server hosting platform with real VPS/node infrastructure controller, resource management, console, file manager, and credits system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

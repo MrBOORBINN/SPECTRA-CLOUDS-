@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database
+  database:
+    image: postgres:16-alpine
+    container_name: infhost-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: infhost_user
+      POSTGRES_PASSWORD: infhost_secure_password_2026
+      POSTGRES_DB: infhost
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infhost_user -d infhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. INFHOST Fullstack Web Panel & API Backend
+  web-panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: infhost-panel
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://infhost_user:infhost_secure_password_2026@database:5432/infhost?schema=public
+      JWT_SECRET: infhost_super_jwt_secret_key_production
+      NODE_API_SECRET: infhost_node_master_secret
+      APP_URL: https://app.infhost.net
+    depends_on:
+      database:
+        condition: service_healthy
+
+  # 3. Dedicated VPS Node Agent (Can run on same host or remote VPS nodes)
+  node-agent:
+    build:
+      context: ./node-agent
+      dockerfile: Dockerfile
+    container_name: infhost-node-agent
+    restart: always
+    environment:
+      INFHOST_MASTER_URL: http://web-panel:3000
+      NODE_ID: node_vps_1
+      NODE_TOKEN: inf_node_sec_simulator_fra01
+    ports:
+      - "25565-25600:25565-25600" # Real Minecraft server port allocations
+    depends_on:
+      - web-panel
+
+volumes:
+  postgres_data:

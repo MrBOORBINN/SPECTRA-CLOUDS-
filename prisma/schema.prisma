@@ -1,0 +1,381 @@
+// INFHOST Prisma Database Schema
+// Production Relational Model for Minecraft Cloud Infrastructure
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ServerStatus {
+  INSTALLING
+  STARTING
+  ONLINE
+  STOPPING
+  OFFLINE
+  CRASHED
+  ERROR
+  NO_NODE
+}
+
+enum NodeStatus {
+  ONLINE
+  OFFLINE
+  DEGRADED
+  MAINTENANCE
+}
+
+enum RedeemCodeStatus {
+  ACTIVE
+  REDEEMED
+  EXPIRED
+  DISABLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum AuditCategory {
+  AUTH
+  SERVER
+  ADMIN
+  NODE
+  PAYMENT
+  CREDITS
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  username      String         @unique
+  passwordHash  String
+  avatarUrl     String?
+  role          Role           @default(USER)
+  status        String         @default("ACTIVE") // ACTIVE, SUSPENDED
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  sessions      Session[]
+  servers       Server[]
+  wallet        CreditWallet?
+  subscriptions Subscription[]
+  orders        Order[]
+  redeemedCodes RedeemCode[]   @relation("UserRedemptions")
+  auditLogs     AuditLog[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ipAddress    String?
+  userAgent    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Node {
+  id            String          @id @default(cuid())
+  name          String
+  location      String          // e.g. "Germany", "Singapore", "India"
+  region        String          // e.g. "Europe", "Asia"
+  hostname      String
+  privateIp     String
+  publicIp      String
+  apiEndpoint   String          // e.g. "https://node-1.infhost.net:8443"
+  authTokenHash String          // Hashed node authentication token
+  cpuCapacity   Int             // total vCPU cores
+  ramCapacity   Int             // total RAM in MB
+  diskCapacity  Int             // total Disk in MB
+  status        NodeStatus      @default(OFFLINE)
+  lastHeartbeat DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  servers       Server[]
+  allocations   ServerAllocation[]
+  heartbeats    NodeHeartbeat[]
+
+  @@index([status])
+  @@index([location])
+}
+
+model NodeHeartbeat {
+  id             String    @id @default(cuid())
+  nodeId         String
+  node           Node      @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  cpuUsagePct    Float
+  ramUsedMb      Int
+  diskUsedMb     Int
+  activeServers  Int
+  timestamp      DateTime  @default(now())
+
+  @@index([nodeId, timestamp])
+}
+
+model Server {
+  id              String             @id @default(cuid())
+  name            String
+  identifier      String             @unique // Slug for subdomain: server-name.infhost.net
+  description     String?
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nodeId          String?
+  node            Node?              @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  
+  software        String             // Vanilla, Paper, Purpur, Spigot, Fabric, Forge, NeoForge
+  version         String             // e.g. "1.21.4"
+  timezone        String             @default("UTC") // Real IANA timezone identifier
+
+  ramMb           Int                // Memory limit in MB
+  cpuCores        Float              // CPU Core allocation
+  storageMb       Int                // Storage limit in MB
+
+  status          ServerStatus       @default(NO_NODE)
+  subdomain       String             // server-name.infhost.net
+  dnsConfigured   Boolean            @default(false)
+  
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  allocation      ServerAllocation?
+  resourceMetrics ServerResource[]
+  backups         ServerBackup[]
+  files           ServerFileMetadata[]
+
+  @@index([userId])
+  @@index([nodeId])
+  @@index([status])
+}
+
+model ServerAllocation {
+  id         String   @id @default(cuid())
+  serverId   String   @unique
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  nodeId     String
+  node       Node     @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  port       Int      // Real assigned Minecraft port (25565 - 29999)
+  assignedAt DateTime @default(now())
+
+  @@unique([nodeId, port])
+}
+
+model ServerResource {
+  id          String   @id @default(cuid())
+  serverId    String
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  cpuUsagePct Float
+  ramUsedMb   Int
+  diskUsedMb  Int
+  playerCount Int      @default(0)
+  maxPlayers  Int      @default(20)
+  uptimeSec   Int      @default(0)
+  recordedAt  DateTime @default(now())
+
+  @@index([serverId, recordedAt])
+}
+
+model ServerBackup {
+  id          String   @id @default(cuid())
+  serverId    String
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  fileName    String
+  fileSizeMb  Float
+  status      String   // COMPLETED, IN_PROGRESS, FAILED
+  checksum    String?
+  downloadUrl String?
+  createdAt   DateTime @default(now())
+
+  @@index([serverId])
+}
+
+model ServerFileMetadata {
+  id           String   @id @default(cuid())
+  serverId     String
+  server       Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  relativePath String   // Path relative to server root e.g. "server.properties"
+  isDirectory  Boolean  @default(false)
+  fileSize     Int
+  mimeType     String?
+  lastModified DateTime @default(now())
+
+  @@unique([serverId, relativePath])
+  @@index([serverId])
+}
+
+model Plan {
+  id            String         @id @default(cuid())
+  name          String         // e.g. "STARTER", "STANDARD", "PRO"
+  slug          String         @unique
+  priceInr      Float          // In Indian Rupees
+  priceCredits  Int            // Monthly credits
+  ramMb         Int
+  cpuCores      Float
+  storageMb     Int
+  backupLimit   Int            @default(2)
+  serverLimit   Int            @default(1)
+  description   String?
+  active        Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId         String
+  plan           Plan      @relation(fields: [planId], references: [id])
+  status         String    // ACTIVE, EXPIRED, CANCELLED
+  currentPeriodStart DateTime @default(now())
+  currentPeriodEnd   DateTime
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Order {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount        Float
+  currency      String        @default("INR") // INR, USD, CREDITS
+  status        PaymentStatus @default(PENDING)
+  provider      String        @default("TEST_GATEWAY") // RAZORPAY, STRIPE, CREDITS
+  providerRef   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  transactions  Transaction[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  amount      Float
+  currency    String
+  status      PaymentStatus
+  gatewayFee  Float         @default(0)
+  referenceId String?
+  createdAt   DateTime      @default(now())
+
+  @@index([orderId])
+}
+
+model CreditWallet {
+  id           String              @id @default(cuid())
+  userId       String              @unique
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance      Int                 @default(0) // Server-authoritative integer credits
+  updatedAt    DateTime            @updatedAt
+
+  transactions CreditTransaction[]
+}
+
+model CreditTransaction {
+  id          String       @id @default(cuid())
+  walletId    String
+  wallet      CreditWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  amount      Int          // e.g. +35 or -35
+  balanceAfter Int
+  source      String       // REDEEM_CODE, PURCHASE, HOURLY_SERVER_BILLING, OFFER_REWARD
+  description String
+  referenceId String?
+  createdAt   DateTime     @default(now())
+
+  @@index([walletId])
+}
+
+model RedeemCode {
+  id          String           @id @default(cuid())
+  code        String           @unique // e.g. INFHOST-XXXX-XXXX-XXXX
+  creditValue Int
+  status      RedeemCodeStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  createdBy   String           // Admin ID or System
+  redeemedBy  String?
+  user        User?            @relation("UserRedemptions", fields: [redeemedBy], references: [id], onDelete: SetNull)
+  redeemedAt  DateTime?
+  createdAt   DateTime         @default(now())
+
+  @@index([code])
+}
+
+model Plugin {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  description      String
+  category         String   // Administration, Economy, World Management, Performance
+  author           String
+  websiteUrl       String?
+  downloads        Int      @default(0)
+  testedVersions   String   // Comma-separated versions, e.g. "1.20,1.21"
+  supportedLoaders String   // "Paper,Purpur,Spigot"
+  createdAt        DateTime @default(now())
+}
+
+model Mod {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  description      String
+  category         String   // Optimization, Gameplay, Cosmetic, Library
+  author           String
+  testedVersions   String   // "1.20.1,1.21.1"
+  supportedLoaders String   // "Fabric,Forge,NeoForge"
+  downloads        Int      @default(0)
+  createdAt        DateTime @default(now())
+}
+
+model Modpack {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique
+  description    String
+  loader         String   // Fabric, Forge
+  mcVersion      String   // "1.20.1"
+  author         String
+  installCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+}
+
+model AuditLog {
+  id        String        @id @default(cuid())
+  category  AuditCategory
+  action    String
+  actorId   String?
+  user      User?         @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  details   String        // JSON stringified details
+  ipAddress String?
+  timestamp DateTime      @default(now())
+
+  @@index([category])
+  @@index([actorId])
+  @@index([timestamp])
+}
